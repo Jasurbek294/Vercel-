@@ -1,0 +1,6 @@
+[
+  { "id": 1, "name": "Mahsulot 1", "price": 50000, "emoji": "👕", "desc": "Qisqa tavsif" },
+  { "id": 2, "name": "Mahsulot 2", "price": 120000, "emoji": "👟", "desc": "Qisqa tavsif" },
+  { "id": 3, "name": "Mahsulot 3", "price": 35000, "emoji": "🧢", "desc": "Qisqa tavsif" },
+  { "id": 4, "name": "Mahsulot 4", "price": 250000, "emoji": "🎒", "desc": "Qisqa tavsif" }
+]

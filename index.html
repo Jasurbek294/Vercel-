@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Do'kon</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: var(--tg-theme-bg-color, #111);
+      --card: var(--tg-theme-secondary-bg-color, #1c1c1e);
+      --text: var(--tg-theme-text-color, #fff);
+      --hint: var(--tg-theme-hint-color, #8e8e93);
+      --btn: var(--tg-theme-button-color, #2ea6ff);
+      --btn-text: var(--tg-theme-button-text-color, #fff);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px 16px 96px;
+      font-family: system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    h1 { font-size: 1.5rem; margin: 0 0 16px; }
+    h2 { font-size: 1.2rem; margin: 0 0 12px; }
+    button { font: inherit; border: 0; cursor: pointer; color: inherit; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+    .card { background: var(--card); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+    .emoji { font-size: 3rem; text-align: center; padding: 12px 0; }
+    .name { font-weight: 600; }
+    .desc { color: var(--hint); font-size: .85rem; }
+    .price { font-weight: 600; margin-top: auto; }
+
+    .add, .primary { background: var(--btn); color: var(--btn-text); border-radius: 10px; padding: 10px; font-weight: 600; width: 100%; }
+    .primary:disabled { opacity: .6; }
+    .qty { display: flex; align-items: center; justify-content: space-between; }
+    .qty button { background: var(--btn); color: var(--btn-text); width: 36px; height: 36px; border-radius: 10px; font-size: 1.2rem; }
+
+    .cart-bar { position: fixed; left: 16px; right: 16px; bottom: 16px; padding: 14px; border-radius: 14px; }
+
+    .sheet { position: fixed; inset: 0; background: var(--bg); padding: 16px; overflow-y: auto; }
+    .row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--card); }
+    .total { font-weight: 700; font-size: 1.1rem; border: 0; margin-bottom: 16px; }
+    input, textarea {
+      width: 100%; margin-bottom: 10px; padding: 12px; border-radius: 10px; border: 0;
+      background: var(--card); color: var(--text); font: inherit;
+    }
+    .back { background: none; color: var(--btn); padding: 0 0 12px; }
+    .error { color: #ff5a5f; margin-bottom: 10px; }
+    .done { text-align: center; padding-top: 30vh; }
+    .done .emoji { font-size: 4rem; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1>Salom! 👋</h1>
+  <div class="grid" id="grid"></div>
+
+  <button class="primary cart-bar" id="cartBar" hidden></button>
+
+  <div class="sheet" id="checkout" hidden>
+    <button class="back" id="back">← Orqaga</button>
+    <h2>Buyurtma</h2>
+    <div id="summary"></div>
+    <form id="form">
+      <input name="name" placeholder="Ismingiz" required maxlength="100">
+      <input name="phone" type="tel" placeholder="Telefon raqam" required maxlength="30">
+      <input name="address" placeholder="Yetkazib berish manzili" required maxlength="300">
+      <textarea name="comment" placeholder="Izoh (ixtiyoriy)" rows="2" maxlength="500"></textarea>
+      <div class="error" id="error" hidden></div>
+      <button class="primary" id="submit" type="submit">Buyurtma berish</button>
+    </form>
+  </div>
+
+  <div class="sheet done" id="done" hidden>
+    <div class="emoji">✅</div>
+    <h2 id="doneTitle"></h2>
+    <p>Tez orada siz bilan bog'lanamiz.</p>
+  </div>
+
+  <script>
+    const tg = window.Telegram && window.Telegram.WebApp;
+    if (tg) { tg.ready(); tg.expand(); }
+
+    const $ = (id) => document.getElementById(id);
+    const money = (n) => n.toLocaleString('ru-RU') + " so'm";
+    let products = [];
+    const cart = {}; // id -> qty
+
+    const count = () => Object.values(cart).reduce((a, b) => a + b, 0);
+    const total = () => products.reduce((sum, p) => sum + p.price * (cart[p.id] || 0), 0);
+
+    function setQty(id, qty) {
+      if (qty <= 0) delete cart[id]; else cart[id] = Math.min(qty, 99);
+      render();
+    }
+
+    function render() {
+      const grid = $('grid');
+      grid.textContent = '';
+      for (const p of products) {
+        const card = document.createElement('div');
+        card.className = 'card';
+        for (const [cls, text] of [['emoji', p.emoji], ['name', p.name], ['desc', p.desc], ['price', money(p.price)]]) {
+          const el = document.createElement('div');
+          el.className = cls;
+          el.textContent = text || '';
+          card.append(el);
+        }
+        const qty = cart[p.id] || 0;
+        if (!qty) {
+          const add = document.createElement('button');
+          add.className = 'add';
+          add.textContent = "Savatga qo'shish";
+          add.onclick = () => setQty(p.id, 1);
+          card.append(add);
+        } else {
+          const box = document.createElement('div');
+          box.className = 'qty';
+          const minus = document.createElement('button');
+          minus.textContent = '−';
+          minus.onclick = () => setQty(p.id, qty - 1);
+          const num = document.createElement('span');
+          num.textContent = qty;
+          const plus = document.createElement('button');
+          plus.textContent = '+';
+          plus.onclick = () => setQty(p.id, qty + 1);
+          box.append(minus, num, plus);
+          card.append(box);
+        }
+        grid.append(card);
+      }
+      $('cartBar').hidden = !count();
+      $('cartBar').textContent = `Savat · ${count()} ta · ${money(total())}`;
+    }
+
+    function renderSummary() {
+      const box = $('summary');
+      box.textContent = '';
+      const addRow = (left, right, cls) => {
+        const row = document.createElement('div');
+        row.className = 'row' + (cls ? ' ' + cls : '');
+        const l = document.createElement('span');
+        l.textContent = left;
+        const r = document.createElement('span');
+        r.textContent = right;
+        row.append(l, r);
+        box.append(row);
+      };
+      for (const p of products) {
+        if (cart[p.id]) addRow(`${p.name} × ${cart[p.id]}`, money(p.price * cart[p.id]));
+      }
+      addRow('Jami', money(total()), 'total');
+    }
+
+    $('cartBar').onclick = () => { renderSummary(); $('checkout').hidden = false; };
+    $('back').onclick = () => { $('checkout').hidden = true; };
+
+    $('form').onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const btn = $('submit');
+      const err = $('error');
+      err.hidden = true;
+      btn.disabled = true;
+      btn.textContent = 'Yuborilmoqda…';
+      try {
+        const r = await fetch('/api/order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            initData: tg ? tg.initData : '',
+            items: Object.entries(cart).map(([id, qty]) => ({ id: Number(id), qty })),
+            name: f.name.value,
+            phone: f.phone.value,
+            address: f.address.value,
+            comment: f.comment.value,
+          }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || 'Xatolik yuz berdi');
+        $('doneTitle').textContent = `Buyurtma #${data.orderId} qabul qilindi!`;
+        $('checkout').hidden = true;
+        $('done').hidden = false;
+        if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+      } catch (e2) {
+        err.textContent = e2.message;
+        err.hidden = false;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Buyurtma berish';
+      }
+    };
+
+    fetch('/products.json')
+      .then((r) => r.json())
+      .then((data) => { products = data; render(); })
+      .catch(() => { $('grid').textContent = "Mahsulotlarni yuklab bo'lmadi"; });
+  </script>
+</body>
+</html>
