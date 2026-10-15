@@ -1,6 +1,5 @@
-const products = require('../products.json');
 const {
-  BOT_TOKEN, ADMIN_CHAT_ID, hasDb, tg, db, money, esc, dayKey, orderText, statusKeyboard, verifyInitData,
+  BOT_TOKEN, ADMIN_CHAT_ID, hasDb, tg, db, getProducts, money, esc, dayKey, orderText, statusKeyboard, verifyInitData,
 } = require('./_lib');
 
 const clean = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -23,6 +22,7 @@ module.exports = async (req, res) => {
   if (!Array.isArray(body.items) || !body.items.length || body.items.length > 50) {
     return res.status(400).json({ error: "Savat bo'sh" });
   }
+  const products = await getProducts();
   const items = [];
   let total = 0;
   for (const item of body.items) {

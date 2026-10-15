@@ -39,6 +39,21 @@ async function db(commands) {
   });
 }
 
+// Mahsulotlar bazada saqlanadi; baza bo'sh bo'lsa products.json dagi boshlang'ich ro'yxat ishlatiladi
+const seedProducts = require('../products.json');
+
+async function getProducts() {
+  if (hasDb) {
+    const [raw] = await db([['GET', 'products']]);
+    if (raw) return JSON.parse(raw);
+  }
+  return seedProducts;
+}
+
+async function saveProducts(list) {
+  await db([['SET', 'products', JSON.stringify(list)]]);
+}
+
 function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -111,5 +126,5 @@ function verifyInitData(initData) {
 
 module.exports = {
   BOT_TOKEN, ADMIN_CHAT_ID, hasDb, STATUS_LABEL,
-  tg, db, esc, money, dayKey, orderText, statusKeyboard, verifyInitData,
+  tg, db, getProducts, saveProducts, esc, money, dayKey, orderText, statusKeyboard, verifyInitData,
 };

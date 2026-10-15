@@ -1,5 +1,6 @@
 const {
-  ADMIN_CHAT_ID, hasDb, STATUS_LABEL, tg, db, esc, money, dayKey, orderText, statusKeyboard,
+  ADMIN_CHAT_ID, hasDb, STATUS_LABEL,
+  tg, db, getProducts, saveProducts, esc, money, dayKey, orderText, statusKeyboard,
 } = require('./_lib');
 
 const USER_TEXT = {
@@ -18,12 +19,27 @@ const PANEL_KB = {
       { text: '🆕 Yangi buyurtmalar', callback_data: 'adm:new' },
       { text: '📋 Oxirgi 10 ta', callback_data: 'adm:last' },
     ],
+    [
+      { text: "➕ Mahsulot qo'shish", callback_data: 'adm:add' },
+      { text: '🗂 Mahsulotlar', callback_data: 'adm:prods' },
+    ],
   ],
 };
 const BACK_KB = { inline_keyboard: [[{ text: '⬅️ Orqaga', callback_data: 'adm:home' }]] };
 const NO_DB_TEXT =
-  "🛠 <b>Admin panel</b>\n\nBaza hali ulanmagan, shuning uchun statistika va buyurtmalar ro'yxati ishlamaydi. " +
+  "🛠 <b>Admin panel</b>\n\nBaza hali ulanmagan, shuning uchun statistika, buyurtmalar ro'yxati va mahsulot qo'shish ishlamaydi. " +
   "Buyurtmalar baribir shu chatga kelaveradi.";
+
+// Mahsulot qo'shish bosqichlari
+const STEPS = ['name', 'price', 'category', 'desc', 'photo'];
+const STEP_TEXT = {
+  name: '1/5. Mahsulot <b>nomini</b> yozing:',
+  price: "2/5. <b>Narxini</b> yozing (faqat raqam, so'mda). Masalan: <code>120000</code>",
+  category: '3/5. <b>Kategoriyasini</b> yozing. Masalan: <code>Kiyim</code>',
+  desc: "4/5. Qisqa <b>tavsif</b> yozing. O'tkazib yuborish uchun <code>-</code> yuboring.",
+  photo: "5/5. Mahsulot <b>rasmini</b> yuboring. Rasmsiz qo'shish uchun <code>-</code> yuboring.",
+};
+const wizardKey = (chatId) => `wizard:${chatId}`;
 
 function parseHash(flat) {
   const out = {};
@@ -55,6 +71,22 @@ async function panelView(view) {
       `<b>Jami:</b> ${Number(count) || 0} ta buyurtma, ${money(Number(revenue) || 0)}\n\n` +
       '<i>Bekor qilingan buyurtmalar summaga kirmaydi.</i>';
     return { text, kb: BACK_KB };
+  }
+
+  if (view === 'prods') {
+    const products = await getProducts();
+    if (!products.length) return { text: "🗂 <b>Mahsulotlar</b>\n\nDo'konda hozircha mahsulot yo'q.", kb: BACK_KB };
+    const lines = products.map((p) => `• ${esc(p.name)} — ${money(p.price)}${p.category ? ` (${esc(p.category)})` : ''}`);
+    const kb = {
+      inline_keyboard: [
+        ...products.map((p) => [{ text: `🗑 ${p.name}`.slice(0, 60), callback_data: `adm:del:${p.id}` }]),
+        ...BACK_KB.inline_keyboard,
+      ],
+    };
+    return {
+      text: `🗂 <b>Mahsulotlar</b> (${products.length} ta)\n\n${lines.join('\n')}\n\nO'chirish uchun mahsulotni bosing.`,
+      kb,
+    };
   }
 
   // 'new' yoki 'last'
@@ -97,9 +129,74 @@ async function saveStatus(orderId, status) {
   return prev;
 }
 
+function askStep(chatId, step, prefix = '') {
+  return tg('sendMessage', {
+    chat_id: chatId,
+    text: `${prefix}${STEP_TEXT[step]}\n\n<i>Bekor qilish: /bekor</i>`,
+    parse_mode: 'HTML',
+    // Guruhda bot javobni ko'rishi uchun xabar botga "reply" qilib yuboriladi
+    reply_markup: { force_reply: true },
+  });
+}
+
+async function wizardStep(msg, w) {
+  const chatId = msg.chat.id;
+  const text = (msg.text || '').trim();
+  const d = w.draft;
+
+  if (w.step === 'name') {
+    if (!text) return askStep(chatId, 'name');
+    d.name = text.slice(0, 60);
+  } else if (w.step === 'price') {
+    const n = Number(text.replace(/[\s.,]/g, ''));
+    if (!Number.isInteger(n) || n <= 0 || n > 1e9) return askStep(chatId, 'price', "⚠️ Narx noto'g'ri.\n");
+    d.price = n;
+  } else if (w.step === 'category') {
+    if (!text) return askStep(chatId, 'category');
+    d.category = text.slice(0, 30);
+  } else if (w.step === 'desc') {
+    if (!text) return askStep(chatId, 'desc');
+    d.desc = text === '-' ? '' : text.slice(0, 120);
+  } else if (w.step === 'photo') {
+    if (msg.photo && msg.photo.length) d.photo = msg.photo[msg.photo.length - 1].file_id;
+    else if (text !== '-') return askStep(chatId, 'photo', '⚠️ Rasm yuboring yoki <code>-</code> yozing.\n');
+    return finishWizard(chatId, d);
+  }
+
+  w.step = STEPS[STEPS.indexOf(w.step) + 1];
+  await db([['SET', wizardKey(chatId), JSON.stringify(w), 'EX', 3600]]);
+  return askStep(chatId, w.step);
+}
+
+async function finishWizard(chatId, d) {
+  const products = await getProducts();
+  const product = {
+    id: products.reduce((max, p) => Math.max(max, p.id), 0) + 1,
+    name: d.name,
+    price: d.price,
+    emoji: '📦',
+    category: d.category,
+    desc: d.desc,
+  };
+  if (d.photo) product.photo = d.photo;
+  await saveProducts([...products, product]);
+  await db([['DEL', wizardKey(chatId)]]);
+
+  await tg('sendMessage', {
+    chat_id: chatId,
+    text:
+      `✅ <b>Mahsulot qo'shildi!</b>\n\n${esc(product.name)} — ${money(product.price)}\n` +
+      `Kategoriya: ${esc(product.category)}${product.photo ? '\nRasm: bor' : ''}\n\n` +
+      "Do'konni qayta ochsangiz, yangi mahsulot ko'rinadi.",
+    parse_mode: 'HTML',
+    reply_markup: PANEL_KB,
+  });
+}
+
 async function handleMessage(msg, host) {
   const chatId = msg.chat.id;
-  const command = msg.text.split(/[\s@]/)[0];
+  const text = msg.text || '';
+  const command = text.startsWith('/') ? text.split(/[\s@]/)[0] : '';
 
   if (command === '/start') {
     await tg('sendMessage', {
@@ -109,69 +206,107 @@ async function handleMessage(msg, host) {
         inline_keyboard: [[{ text: "🛍 Do'konni ochish", web_app: { url: `https://${host}/` } }]],
       },
     });
-  } else if (command === '/id') {
+    return;
+  }
+  if (command === '/id') {
     await tg('sendMessage', { chat_id: chatId, text: `Chat ID: ${chatId}` });
-  } else if (command === '/admin') {
-    if (!isAdminChat(chatId)) {
-      await tg('sendMessage', { chat_id: chatId, text: "Bu buyruq faqat admin uchun." });
-      return;
-    }
+    return;
+  }
+
+  // Quyidagilarning hammasi faqat admin chatida ishlaydi
+  if (!isAdminChat(chatId)) {
+    if (command === '/admin') await tg('sendMessage', { chat_id: chatId, text: 'Bu buyruq faqat admin uchun.' });
+    return;
+  }
+
+  if (command === '/admin') {
     const view = await panelView('home');
     await tg('sendMessage', { chat_id: chatId, text: view.text, parse_mode: 'HTML', reply_markup: view.kb });
+    return;
+  }
+  if (!hasDb) return;
+
+  if (command === '/bekor') {
+    await db([['DEL', wizardKey(chatId)]]);
+    await tg('sendMessage', { chat_id: chatId, text: "Mahsulot qo'shish bekor qilindi.", reply_markup: PANEL_KB });
+    return;
+  }
+
+  // Mahsulot qo'shish jarayoni davom etayotgan bo'lsa, xabarni keyingi bosqich sifatida qabul qilamiz
+  if (!command) {
+    const [raw] = await db([['GET', wizardKey(chatId)]]);
+    if (raw) await wizardStep(msg, JSON.parse(raw));
   }
 }
 
 async function handleCallback(cq) {
   const data = cq.data || '';
   const chat = cq.message && cq.message.chat;
-  if (!chat || !isAdminChat(chat.id)) {
-    await tg('answerCallbackQuery', { callback_query_id: cq.id, text: "Ruxsat yo'q" });
-    return;
-  }
+  const answer = (text) => tg('answerCallbackQuery', { callback_query_id: cq.id, text });
+  if (!chat || !isAdminChat(chat.id)) return answer("Ruxsat yo'q");
 
   // Admin buyurtma ostidagi holat tugmasini bosdi
   if (data.startsWith('st:')) {
     const [, status, userId, orderId] = data.split(':');
-    if (!USER_TEXT[status]) return;
+    if (!USER_TEXT[status]) return answer();
 
     const prev = await saveStatus(orderId, status);
-    if (prev === status) {
-      await tg('answerCallbackQuery', { callback_query_id: cq.id, text: `Allaqachon: ${STATUS_LABEL[status]}` });
-      return;
-    }
+    if (prev === status) return answer(`Allaqachon: ${STATUS_LABEL[status]}`);
     await tg('sendMessage', { chat_id: userId, text: USER_TEXT[status].replace('ID', orderId) });
     await tg('sendMessage', {
       chat_id: chat.id,
       text: `#${orderId}: ${STATUS_LABEL[status]}`,
       reply_to_message_id: cq.message.message_id,
     });
-    await tg('answerCallbackQuery', { callback_query_id: cq.id, text: STATUS_LABEL[status] });
-    return;
+    return answer(STATUS_LABEL[status]);
   }
 
+  if (!hasDb && data !== 'adm:home') return answer('Avval bazani ulang');
+
   if (data.startsWith('adm:o:')) {
-    const orderId = data.slice(6);
-    const [raw] = hasDb ? await db([['GET', `order:${orderId}`]]) : [null];
-    if (!raw) {
-      await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Buyurtma topilmadi' });
-      return;
-    }
+    const [raw] = await db([['GET', `order:${data.slice(6)}`]]);
+    if (!raw) return answer('Buyurtma topilmadi');
     const o = JSON.parse(raw);
     await tg('sendMessage', { chat_id: chat.id, text: orderText(o), parse_mode: 'HTML', reply_markup: statusKeyboard(o) });
-    await tg('answerCallbackQuery', { callback_query_id: cq.id });
-    return;
+    return answer();
+  }
+
+  if (data === 'adm:add') {
+    await db([['SET', wizardKey(chat.id), JSON.stringify({ step: 'name', draft: {} }), 'EX', 3600]]);
+    await askStep(chat.id, 'name', "➕ <b>Yangi mahsulot</b>\n\n");
+    return answer();
+  }
+
+  const edit = (text, kb) =>
+    tg('editMessageText', { chat_id: chat.id, message_id: cq.message.message_id, text, parse_mode: 'HTML', reply_markup: kb });
+
+  // O'chirishdan oldin tasdiq so'raladi
+  if (data.startsWith('adm:del:')) {
+    const id = Number(data.slice(8));
+    const p = (await getProducts()).find((x) => x.id === id);
+    if (!p) return answer('Mahsulot topilmadi');
+    await edit(`🗑 <b>${esc(p.name)}</b> (${money(p.price)}) do'kondan o'chirilsinmi?`, {
+      inline_keyboard: [
+        [{ text: "✅ Ha, o'chirish", callback_data: `adm:delok:${id}` }],
+        [{ text: "⬅️ Yo'q", callback_data: 'adm:prods' }],
+      ],
+    });
+    return answer();
+  }
+
+  if (data.startsWith('adm:delok:')) {
+    const id = Number(data.slice(10));
+    const products = await getProducts();
+    if (products.some((x) => x.id === id)) await saveProducts(products.filter((x) => x.id !== id));
+    const view = await panelView('prods');
+    await edit(view.text, view.kb);
+    return answer("O'chirildi");
   }
 
   if (data.startsWith('adm:')) {
     const view = await panelView(data.slice(4));
-    await tg('editMessageText', {
-      chat_id: chat.id,
-      message_id: cq.message.message_id,
-      text: view.text,
-      parse_mode: 'HTML',
-      reply_markup: view.kb,
-    });
-    await tg('answerCallbackQuery', { callback_query_id: cq.id });
+    await edit(view.text, view.kb);
+    return answer();
   }
 }
 
@@ -182,12 +317,8 @@ module.exports = async (req, res) => {
 
   const update = req.body || {};
   try {
-    if (update.message && typeof update.message.text === 'string') {
-      await handleMessage(update.message, req.headers.host);
-    }
-    if (update.callback_query) {
-      await handleCallback(update.callback_query);
-    }
+    if (update.message) await handleMessage(update.message, req.headers.host);
+    if (update.callback_query) await handleCallback(update.callback_query);
   } catch (e) {
     console.error(e);
   }
