@@ -1,6 +1,6 @@
 const {
   ADMIN_CHAT_ID, hasDb, STATUS_LABEL,
-  tg, db, getProducts, saveProducts, esc, money, dayKey, orderText, statusKeyboard,
+  tg, db, getProducts, addProduct, removeProduct, esc, money, dayKey, orderText, statusKeyboard,
 } = require('./_lib');
 
 const USER_TEXT = {
@@ -169,17 +169,7 @@ async function wizardStep(msg, w) {
 }
 
 async function finishWizard(chatId, d) {
-  const products = await getProducts();
-  const product = {
-    id: products.reduce((max, p) => Math.max(max, p.id), 0) + 1,
-    name: d.name,
-    price: d.price,
-    emoji: '📦',
-    category: d.category,
-    desc: d.desc,
-  };
-  if (d.photo) product.photo = d.photo;
-  await saveProducts([...products, product]);
+  const product = await addProduct(d);
   await db([['DEL', wizardKey(chatId)]]);
 
   await tg('sendMessage', {
@@ -295,9 +285,7 @@ async function handleCallback(cq) {
   }
 
   if (data.startsWith('adm:delok:')) {
-    const id = Number(data.slice(10));
-    const products = await getProducts();
-    if (products.some((x) => x.id === id)) await saveProducts(products.filter((x) => x.id !== id));
+    await removeProduct(Number(data.slice(10)));
     const view = await panelView('prods');
     await edit(view.text, view.kb);
     return answer("O'chirildi");

@@ -54,6 +54,37 @@ async function saveProducts(list) {
   await db([['SET', 'products', JSON.stringify(list)]]);
 }
 
+// fields: { name, price, category, desc, photo? } — oldindan tekshirilgan bo'lishi kerak
+async function addProduct(fields) {
+  const products = await getProducts();
+  const product = {
+    id: products.reduce((max, p) => Math.max(max, p.id), 0) + 1,
+    name: fields.name,
+    price: fields.price,
+    emoji: '📦',
+    category: fields.category,
+    desc: fields.desc || '',
+  };
+  if (fields.photo) product.photo = fields.photo;
+  await saveProducts([...products, product]);
+  return product;
+}
+
+async function removeProduct(id) {
+  const products = await getProducts();
+  const left = products.filter((p) => p.id !== id);
+  if (left.length !== products.length) await saveProducts(left);
+  return left.length !== products.length;
+}
+
+// Admin = admin chatining o'zi (shaxsiy chat bo'lsa) yoki admin guruhining egasi/admini
+async function isAdminUser(userId) {
+  if (!ADMIN_CHAT_ID || !userId) return false;
+  if (String(userId) === String(ADMIN_CHAT_ID)) return true;
+  const r = await tg('getChatMember', { chat_id: ADMIN_CHAT_ID, user_id: userId });
+  return Boolean(r.ok && ['creator', 'administrator'].includes(r.result.status));
+}
+
 function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -126,5 +157,5 @@ function verifyInitData(initData) {
 
 module.exports = {
   BOT_TOKEN, ADMIN_CHAT_ID, hasDb, STATUS_LABEL,
-  tg, db, getProducts, saveProducts, esc, money, dayKey, orderText, statusKeyboard, verifyInitData,
+  tg, db, getProducts, saveProducts, addProduct, removeProduct, isAdminUser, esc, money, dayKey, orderText, statusKeyboard, verifyInitData,
 };

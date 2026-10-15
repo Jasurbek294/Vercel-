@@ -34,6 +34,28 @@
     button { font: inherit; border: 0; cursor: pointer; color: inherit; background: none; }
     [hidden] { display: none !important; }
 
+    /* Admin */
+    .admin-bar {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      margin-top: 16px; padding: 12px 12px 12px 18px; border-radius: 999px;
+      background: var(--accent); color: #fff;
+    }
+    .admin-bar b { font-size: .9rem; }
+    .admin-bar small { display: block; opacity: .85; font-size: .75rem; }
+    .admin-bar button { background: #fff; color: var(--dark); border-radius: 999px; padding: 10px 16px; font-weight: 600; font-size: .85rem; flex: none; }
+    .round.trash { color: var(--danger); }
+    .photo-pick {
+      display: grid; place-items: center; width: 100%; aspect-ratio: 4 / 3; border-radius: 16px;
+      border: 1.5px dashed var(--muted); background: #fff; color: var(--muted); font-size: .85rem;
+      overflow: hidden; cursor: pointer; text-align: center;
+    }
+    .photo-pick img { width: 100%; height: 100%; object-fit: cover; }
+    .photo-pick input { display: none; }
+    .toast {
+      position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 20;
+      background: var(--dark); color: #fff; padding: 10px 18px; border-radius: 999px; font-size: .85rem;
+    }
+
     /* Header */
     .header {
       position: sticky; top: 0; z-index: 5;
@@ -190,6 +212,11 @@
     <input id="search" type="search" placeholder="Qidirish">
   </div>
 
+  <div class="admin-bar" id="adminBar" hidden>
+    <div><b>Admin rejimi</b><small>Bu panel faqat sizga ko'rinadi</small></div>
+    <button id="addOpen">+ Mahsulot</button>
+  </div>
+
   <h2>Kategoriyalar</h2>
   <div class="chips" id="chips"></div>
 
@@ -228,6 +255,32 @@
     </form>
   </div>
 
+  <div class="sheet" id="addSheet" hidden>
+    <div class="sheet-head">
+      <button class="icon-btn" id="addBack" aria-label="Orqaga">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h3>Yangi mahsulot</h3>
+    </div>
+    <form class="panel" id="addForm">
+      <label class="photo-pick" id="photoPick">
+        <span id="photoHint">📷 Rasm tanlash<br>(ixtiyoriy)</span>
+        <input type="file" id="a-photo" accept="image/*">
+      </label>
+      <label for="a-name">Nomi</label>
+      <input class="field" id="a-name" required maxlength="60">
+      <label for="a-price">Narxi (so'm)</label>
+      <input class="field" id="a-price" type="number" inputmode="numeric" min="1" step="1" required>
+      <label for="a-category">Kategoriya</label>
+      <input class="field" id="a-category" list="categories" required maxlength="30" placeholder="Masalan: Kiyim">
+      <datalist id="categories"></datalist>
+      <label for="a-desc">Qisqa tavsif (ixtiyoriy)</label>
+      <input class="field" id="a-desc" maxlength="120">
+      <div class="error" id="addError" hidden></div>
+      <button class="pill-dark submit" id="addSubmit" type="submit">Qo'shish</button>
+    </form>
+  </div>
+
   <div class="sheet done" id="done" hidden>
     <div class="big">✓</div>
     <h3 id="doneTitle"></h3>
@@ -258,7 +311,11 @@
     };
     const HEART = '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/>';
 
+    const TRASH = '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>';
+
     let products = [];
+    let isAdmin = false;
+    let photoData = null;
     let category = 'Hammasi';
     let query = '';
     const cart = {}; // id -> qty
@@ -325,6 +382,13 @@
         fav.append(icon(HEART));
         fav.onclick = () => toggleFav(p.id);
         actions.append(fav);
+        if (isAdmin) {
+          const del = el('button', 'round trash');
+          del.setAttribute('aria-label', "O'chirish");
+          del.append(icon(TRASH));
+          del.onclick = () => deleteProduct(p);
+          actions.append(del);
+        }
         ph.append(actions);
         if (p.category) ph.append(el('span', 'tag', p.category));
         card.append(ph);
@@ -448,10 +512,156 @@
       }
     };
 
-    fetch('/api/products')
-      .then((r) => r.json())
-      .then((data) => { products = data; render(); })
-      .catch(() => { $('grid').textContent = "Mahsulotlarni yuklab bo'lmadi"; });
+    function loadProducts() {
+      return fetch('/api/products')
+        .then((r) => r.json())
+        .then((data) => {
+          products = data;
+          // O'chirilgan mahsulotlar savatda qolib ketmasin
+          for (const id in cart) if (!products.some((p) => p.id === Number(id))) delete cart[id];
+          render();
+        })
+        .catch(() => { $('grid').textContent = "Mahsulotlarni yuklab bo'lmadi"; });
+    }
+
+    // ---- Admin ----
+    async function adminApi(payload) {
+      const r = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initData: tg ? tg.initData : '', ...payload }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || 'Xatolik yuz berdi');
+      return data;
+    }
+
+    function toast(text) {
+      const t = el('div', 'toast', text);
+      document.body.append(t);
+      setTimeout(() => t.remove(), 2200);
+    }
+
+    function confirmBox(text) {
+      return new Promise((resolve) => {
+        if (tg && tg.showConfirm && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')) tg.showConfirm(text, resolve);
+        else resolve(window.confirm(text));
+      });
+    }
+
+    async function deleteProduct(p) {
+      if (!(await confirmBox(`«${p.name}» do'kondan o'chirilsinmi?`))) return;
+      try {
+        await adminApi({ action: 'delete', id: p.id });
+        await loadProducts();
+        toast("O'chirildi");
+      } catch (e) {
+        toast(e.message);
+      }
+    }
+
+    // Rasmni yuborishdan oldin kichraytiramiz (tezroq yuklanadi)
+    function resizeImage(file, max = 1200) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const s = Math.min(1, max / Math.max(img.width, img.height));
+          const c = document.createElement('canvas');
+          c.width = Math.round(img.width * s);
+          c.height = Math.round(img.height * s);
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          URL.revokeObjectURL(img.src);
+          resolve(c.toDataURL('image/jpeg', 0.85));
+        };
+        img.onerror = reject;
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    function openAdd() {
+      const box = $('categories');
+      box.textContent = '';
+      for (const c of new Set(products.map((p) => p.category).filter(Boolean))) {
+        const o = el('option');
+        o.value = c;
+        box.append(o);
+      }
+      $('addSheet').hidden = false;
+      if (tg && tg.BackButton) tg.BackButton.show();
+    }
+    function closeAdd() {
+      $('addSheet').hidden = true;
+      if (tg && tg.BackButton && $('checkout').hidden) tg.BackButton.hide();
+    }
+    function resetAdd() {
+      $('addForm').reset();
+      photoData = null;
+      $('photoPick').querySelectorAll('img').forEach((i) => i.remove());
+      $('photoHint').hidden = false;
+      $('addError').hidden = true;
+    }
+
+    $('addOpen').onclick = openAdd;
+    $('addBack').onclick = closeAdd;
+    if (tg && tg.BackButton) tg.BackButton.onClick(() => { if (!$('addSheet').hidden) closeAdd(); });
+
+    $('a-photo').onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        photoData = await resizeImage(file);
+        $('photoPick').querySelectorAll('img').forEach((i) => i.remove());
+        const img = el('img');
+        img.src = photoData;
+        img.alt = '';
+        $('photoHint').hidden = true;
+        $('photoPick').prepend(img);
+      } catch (err) {
+        toast("Rasmni o'qib bo'lmadi");
+      }
+    };
+
+    $('addForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = $('addSubmit');
+      const err = $('addError');
+      err.hidden = true;
+      btn.disabled = true;
+      btn.textContent = 'Saqlanmoqda…';
+      try {
+        await adminApi({
+          action: 'add',
+          name: $('a-name').value,
+          price: Number($('a-price').value),
+          category: $('a-category').value,
+          desc: $('a-desc').value,
+          photo: photoData,
+        });
+        resetAdd();
+        closeAdd();
+        await loadProducts();
+        toast("Mahsulot qo'shildi");
+        if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+      } catch (e2) {
+        err.textContent = e2.message;
+        err.hidden = false;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Qo'shish";
+      }
+    };
+
+    loadProducts();
+    // Admin tugmalari faqat server "admin" deb tasdiqlasa ko'rsatiladi
+    if (tg && tg.initData) {
+      adminApi({ action: 'check' })
+        .then((r) => {
+          isAdmin = Boolean(r.admin);
+          $('adminBar').hidden = !isAdmin;
+          render();
+        })
+        .catch(() => {});
+    }
   </script>
 </body>
 </html>
